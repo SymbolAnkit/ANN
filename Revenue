@@ -1,0 +1,110 @@
+# Clear Environment
+rm(list = ls())
+
+# Set Working Directory
+setwd("C:/Users/Ankit/Desktop/ANN")
+
+# Load required libraries
+library(readr)
+library(lubridate)
+library(neuralnet)
+library(dplyr)
+
+# load data sets
+df <- read_csv("new_sales_data.csv")
+div.master <- read_csv("divisionmaster.csv")
+
+# Remove white spaces
+trimws(div.master)
+trimws(df$DivisionA) 
+
+# merging data sets
+df <- merge(df,div.master,by.x = "DivisionA", by.y = "0",all.x = T)
+
+# order by Billing date
+df <- df[order(df$BillingDate),]
+
+# subsetting using dplyr::filter
+df1617 <- filter(df , df$BillingDate >= "2016-01-01")
+
+df$DivisionA <- NULL
+df$`1` <- NULL
+
+colnames(df)[3] <- "Division" 
+
+sapply(df , function(x) class(x))
+
+df$Day <- as.numeric(substr(df$BillingDate,9,10))
+df$Month <- as.numeric(substr(df$BillingDate,6,7))
+df$Year <- as.numeric(substr(df$BillingDate,1,4))
+df$weekday <- as.numeric(wday(df$BillingDate))
+
+usedf <- df[ , -c(1,3)]
+
+# Min Max scaling for ANN
+
+Set.seed(12)
+maxs <- apply(usedf,  2 , max)
+mins <- apply( usedf , 2 ,min)
+
+scaledf <- scale(usedf,center = mins , scale = (maxs-mins))
+
+# Creating ANN Model
+
+set.seed(1121)
+NNN <- neuralnet(Netvalue~ Day+Month+Year+weekday ,scaledf,hidden = 3,linear.output = T)
+
+plot(NNN)
+
+##### DATA 2017 #############
+
+df17 <- filter(df , df$BillingDate >= "2017-01-01")
+
+df17$DivisionA <- NULL
+df17$`1` <- NULL
+df17$Year <- NULL
+
+colnames(df17)[3] <- "Division" 
+
+sapply(df17 , function(x) class(x))
+
+usedf17 <- df17[ , -c(1,3)]
+
+# scaling data
+set.seed(11)
+
+maxs17 <- apply(usedf17,  2 , max)
+mins17 <- apply( usedf17 , 2 ,min)
+
+scaledf17 <- scale(usedf17,center = mins17 , scale = (maxs17-mins17))
+
+set.seed(15)
+
+NNN <- neuralnet(Netvalue~ Day+Month+weekday ,scaledf17,
+                 hidden = 1,stepmax = 1e6 , linear.output = T)
+
+plot(NNN)
+
+# prediction using ANN model
+
+pred <- neuralnet::compute(NNN , scaledf17[ , 2:4])
+pred$net.result
+
+scaledf17 <- as.data.frame(scaledf17)
+
+# Descaling of predicted output
+
+pred <- (pred$net.result * (max(df17$Netvalue)-min(df17$Netvalue))) +
+  min(df17$Netvalue)
+
+df17$pr.Netvalue <- pred
+
+RMSE <- function(a,b){
+  sqrt(mean((a-b)^2))
+}
+
+RMSE(df17$pr.Netvalue,df17$Netvalue)
+
+write.csv(df17,"NNresult.csv",row.names = F) 
+
+plot(df17$Netvalue,df17$pr.Netvalue)
