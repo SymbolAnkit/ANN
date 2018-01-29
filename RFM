@@ -1,0 +1,111 @@
+rm(list = ls())
+
+setwd("C:/Users/e6723/Desktop/DR LAL")
+
+library(RODBC)
+
+library(plyr)
+
+library(dplyr)
+
+library(stringr)
+
+library(readxl)
+
+dbhandle <- odbcDriverConnect('Driver={SQL Server};server=PC-TERM04SW01;database=DrLal;trusted_connection=True')
+
+res <- sqlQuery(dbhandle,"SELECT 
+                TransactionDate,RefDocCode,HomeCollectionCharges
+    FROM [DrLal].[dbo].[tblPatientTransaction]")
+
+res$Date <- substr(res$TransactionDate,1,10)
+
+res$Date <- as.Date(res$Date , "%Y-%m-%d")
+
+res$RefDocCode <- as.character(res$RefDocCode)
+
+sum(is.na(res$HomeCollectionCharges))
+
+summary(res$HomeCollectionCharges)
+
+res$HomeCollectionCharges[which(is.na(res$HomeCollectionCharges))] <- 0
+
+res <- res[order(res$Date),]
+
+res$last.ref.days <- as.numeric(difftime(Sys.Date(),res$Date , units = "days"))
+
+# na.omit(res)
+
+# res$TestCode <- as.character(res$TestCode)
+
+# res$TestCode <- trimws(res$TestCode)
+
+#  work start - find least frequent doctors
+
+drdata <- res %>% group_by(RefDocCode) %>%
+  summarise(netvalue = sum(HomeCollectionCharges),
+            freq = length(Date),
+            recency = min(last.ref.days))
+
+drdata10 <- filter(drdata , drdata$freq < 6)
+
+least_ref_doctor <- drdata10$RefDocCode
+
+use_data <- res[ ! res$RefDocCode %in% least_ref_doctor ,  ]
+
+# work end
+
+final <- use_data %>% group_by(RefDocCode) %>% 
+  summarise(R_VALUE = min(last.ref.days),
+            F_VALUE = length(Date),
+    M_VALUE = sum(HomeCollectionCharges)
+    )
+
+
+final <- final[ ! final$M_VALUE <= 50 ,]
+
+summary(final$R_VALUE)
+summary(final$F_VALUE)
+summary(final$M_VALUE)
+
+Recency_cuts <- quantile(final$R_VALUE , probs = seq(0.20 ,0.80 , by=0.20))
+Frequency_cuts <- quantile(final$F_VALUE , probs = seq(0.20,0.80, by=0.20))
+Monetary_cuts <- quantile(final$M_VALUE , probs = seq(0.20,0.80,by=0.20))
+
+
+final$R_SCORE <- findInterval(final$R_VALUE , c(-Inf,Recency_cuts,Inf))
+final$F_SCORE <- findInterval(final$F_VALUE , c(-Inf,Frequency_cuts,Inf))
+final$M_SCORE <- findInterval(final$M_VALUE , c(-Inf,Monetary_cuts,Inf))
+
+final$COMB_F_M_SCORE <- ((final$F_SCORE + final$M_SCORE)/2)
+
+final$RFM_SCORE <- paste(final$R_SCORE,final$F_SCORE,final$M_SCORE,sep = "")
+
+#  Mapping 
+
+refrnce_doc <- sqlQuery(dbhandle,"SELECT RefDocCode,DocCity,DocName FROM
+                        [DrLal].[dbo].[tblPatientTransaction] ")
+ 
+final$RefDocCode <- trimws(final$RefDocCode)
+
+refrnce_doc$RefDocCode <- trimws(refrnce_doc$RefDocCode)
+refrnce_doc$DocName <- trimws(refrnce_doc$DocName)
+refrnce_doc$DocCity <- trimws(refrnce_doc$DocCity)
+
+refrnce_doc$DocCity <- toupper(refrnce_doc$DocCity)
+refrnce_doc$DocName <- toupper(refrnce_doc$DocName)
+
+refrnce_doc$DocCity <- gsub("[[:punct:][:blank:]]+", " ", refrnce_doc$DocCity)
+refrnce_doc$DocName <- gsub("[[:punct:][:blank:]]+", " ", refrnce_doc$DocName)
+
+doc <- unique(subset(refrnce_doc,select = c("RefDocCode","DocName","DocCity")))
+
+target <- merge(final,doc,by.x = "RefDocCode",by.y = "RefDocCode",all.x = TRUE)
+# 
+
+tosql <- data.frame(target)
+
+sqlSave(dbhandle,tosql,tablename = "DRLAL_RFM",rownames = F,colnames = F,safer = F,fast = T)
+
+write.csv(target,"RFM_DRLAL_GR.csv" , row.names = F)
+
